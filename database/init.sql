@@ -84,6 +84,7 @@ CREATE TABLE validation_matches (
     -- Similarity scores
     llm_similarity_score DECIMAL(5,2) DEFAULT 0,
     pixel_similarity_score DECIMAL(5,2) DEFAULT 0,
+    phash_similarity_score DECIMAL(5,2) DEFAULT 0,
     semantic_similarity_score DECIMAL(5,2) DEFAULT 0,
     overall_similarity_score DECIMAL(5,2) DEFAULT 0,
     -- Match flags
@@ -95,7 +96,7 @@ CREATE TABLE validation_matches (
     matched_elements JSON,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (validation_id) REFERENCES validations(id) ON DELETE CASCADE,
-    FOREIGN KEY (template_file_id) REFERENCES template_files(id),
+    FOREIGN KEY (template_file_id) REFERENCES template_files(id) ON DELETE CASCADE,
     INDEX idx_validation_id (validation_id),
     INDEX idx_similarity (overall_similarity_score)
 );

@@ -111,10 +111,36 @@ def compute_file_hash(file_path: str) -> str:
     return sha256.hexdigest()
 
 
+def optimize_image_for_llm(file_path: str, max_size: int = 1024) -> str:
+    """
+    Resize image to a max dimension and save as optimized JPEG.
+    Used to speed up LLM uploads and processing.
+    """
+    try:
+        img = Image.open(file_path).convert("RGB")
+        # Maintain aspect ratio
+        w, h = img.size
+        if max(w, h) > max_size:
+            if w > h:
+                new_w = max_size
+                new_h = int(h * (max_size / w))
+            else:
+                new_h = max_size
+                new_w = int(w * (max_size / h))
+            img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        
+        opt_path = file_path + "_opt.jpg"
+        img.save(opt_path, "JPEG", quality=85, optimize=True)
+        return opt_path
+    except Exception as e:
+        logger.error("Image optimization failed for %s: %s", file_path, e)
+        return file_path
+
+
 def cleanup_temp_file(path: str):
     """Remove a temporary file safely."""
     try:
-        if path and os.path.exists(path) and "tmp" in path:
+        if path and os.path.exists(path) and ("tmp" in path or "_opt.jpg" in path or "_thumb.jpg" in path):
             os.remove(path)
     except Exception:
         pass

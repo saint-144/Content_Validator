@@ -6,11 +6,14 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "mysql+pymysql://root:Validator@2024@localhost:3306/content_validator"
     
-    # LLM Provider: "anthropic", "openai", or "gemini"
-    LLM_PROVIDER: str = "gemini"
+    # LLM Provider: "anthropic", "openai", "gemini", or "nvidia"
+    LLM_PROVIDER: str = "nvidia"
     ANTHROPIC_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
     GOOGLE_API_KEY: str = ""
+    NVIDIA_API_KEY: str = ""
+    NVIDIA_BASE_URL: str = "https://integrate.api.nvidia.com/v1"
+    NVIDIA_MODEL: str = "mistralai/mistral-large-3-675b-instruct-2512"
     
     # File storage
     UPLOAD_DIR: str = "./uploads"

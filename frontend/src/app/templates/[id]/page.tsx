@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { useParams, useRouter } from 'next/navigation';
-import { getTemplate, uploadTemplateFiles, retrainTemplate, deleteTemplateFile, type TemplateDetail, type TemplateFile } from '@/lib/api';
+import { getTemplate, uploadTemplateFiles, retrainTemplate, syncTemplateStatus, deleteTemplateFile, type TemplateDetail, type TemplateFile } from '@/lib/api';
 import { format } from 'date-fns';
 
 const STATUS_ICON: Record<string, string> = { done:'✅', processing:'⟳', pending:'⏳', error:'❌' };
@@ -93,6 +93,7 @@ export default function TemplateDetailPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [retraining, setRetraining] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [error, setError] = useState('');
   const [msg, setMsg] = useState('');
@@ -141,6 +142,16 @@ export default function TemplateDetailPage() {
     finally { setRetraining(false); }
   };
 
+  const handleSync = async () => {
+    setSyncing(true); setMsg(''); setError('');
+    try {
+      const res = await syncTemplateStatus(id);
+      setMsg(`✓ Sync complete. Status is now: ${res.status}`);
+      load();
+    } catch (e: any) { setError(e.response?.data?.detail || 'Sync failed'); }
+    finally { setSyncing(false); }
+  };
+
   const handleDeleteFile = async (templateId: number, fileId: number) => {
     if (!confirm('Remove this file from the template?')) return;
     await deleteTemplateFile(templateId, fileId);
@@ -174,6 +185,10 @@ export default function TemplateDetailPage() {
           </div>
         </div>
         <div style={{ display:'flex', gap:10 }}>
+          <button className="btn-secondary" onClick={handleSync} disabled={syncing} 
+            style={{ borderColor: '#3b82f6', color: '#60a5fa' }}>
+            {syncing ? '⟳ Syncing...' : '↻ Sync Status'}
+          </button>
           {template.file_count > 0 && (
             <button className="btn-secondary" onClick={handleRetrain} disabled={retraining}>
               {retraining ? '⟳ Retraining...' : '↻ Retrain All'}

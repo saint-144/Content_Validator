@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   mysql:
     image: mysql:8.0
@@ -33,8 +31,12 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
+      - NVIDIA_BASE_URL=${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
+      - NVIDIA_MODEL=${NVIDIA_MODEL:-mistralai/mistral-large-3-675b-instruct-2512}
       - UPLOAD_DIR=/app/uploads
-      - CORS_ORIGINS=["http://localhost:3000","http://frontend:3000"]
+      - PYTHONUNBUFFERED=1
+      - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost:3000","http://frontend:3000"]}
     volumes:
       - uploads_data:/app/uploads
     depends_on:
@@ -53,6 +55,16 @@ services:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
     depends_on:
       - backend
+
+  adminer:
+    image: adminer:latest
+    container_name: cv_adminer
+    restart: always
+    ports:
+      - "8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
 
 volumes:
   mysql_data:

@@ -71,6 +71,7 @@ class ValidationMatch(Base):
     template_file_name = Column(String(500), nullable=False)
     llm_similarity_score = Column(DECIMAL(5,2), default=0)
     pixel_similarity_score = Column(DECIMAL(5,2), default=0)
+    phash_similarity_score = Column(DECIMAL(5,2), default=0)
     semantic_similarity_score = Column(DECIMAL(5,2), default=0)
     overall_similarity_score = Column(DECIMAL(5,2), default=0)
     is_suspected_match = Column(Boolean, default=False)

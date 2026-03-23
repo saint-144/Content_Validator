@@ -103,9 +103,9 @@ Return a JSON object with this exact structure:
   "detected_text_in_destination": "all text visible in destination",
   "post_timestamp_hint": "if any date/time visible in content, extract it, else null",
   "platform_hint": "if platform watermark/UI visible (Instagram, Facebook, etc), else null",
-  "mcc_compliant": true or false (false if content contains: explicit/adult content, violence, hate speech, illegal content, misleading claims, copyright violations),
-  "mcc_issues": ["list any compliance issues found, empty if clean"],
-  "overall_verdict": "appropriate" | "escalate" | "need_review",
+  "mcc_compliant": true or false (false if content contains explicit/adult/violent content OR if it fails to be a valid variation of the training materials provided),
+  "mcc_issues": ["list any compliance issues found, including if it doesn't match the brand kit"],
+  "overall_verdict": "appropriate" (matches approved content), "escalate" (violations or unapproved content), "need_review" (minor differences),
   "verdict_reasoning": "brief explanation of overall verdict",
   "file_matches": [
     {{
@@ -130,10 +130,23 @@ async def _call_llm_vision(image_path: Optional[str], prompt: str) -> Dict[str, 
     try:
         if settings.LLM_PROVIDER == "anthropic" and settings.ANTHROPIC_API_KEY:
             return await _call_anthropic(image_path, prompt)
-        elif settings.LLM_PROVIDER == "openai" and settings.OPENAI_API_KEY:
-            return await _call_openai(image_path, prompt)
         elif settings.LLM_PROVIDER == "gemini" and settings.GOOGLE_API_KEY:
             return await _call_gemini(image_path, prompt)
+        elif settings.LLM_PROVIDER == "nvidia" and settings.NVIDIA_API_KEY:
+            logger.info("Calling NVIDIA NIM with model: %s", settings.NVIDIA_MODEL)
+            
+            # Optimization: Resize large images before sending to LLM
+            from app.services.image_service import optimize_image_for_llm, cleanup_temp_file
+            optimized_path = None
+            if image_path:
+                optimized_path = optimize_image_for_llm(image_path)
+            
+            try:
+                result = await _call_nvidia(optimized_path or image_path, prompt)
+                return result
+            finally:
+                if optimized_path and optimized_path != image_path:
+                    cleanup_temp_file(optimized_path)
         else:
             logger.warning("No LLM API key configured - returning mock analysis")
             return _mock_analysis(image_path)
@@ -205,11 +218,72 @@ async def _call_openai(image_path: Optional[str], prompt: str) -> Dict[str, Any]
         return _parse_json_response(text)
 
 
+async def _call_nvidia(image_path: Optional[str], prompt: str) -> Dict[str, Any]:
+    """Call Nvidia NIM (OpenAI compatible) with exponential backoff retries."""
+    import asyncio
+    
+    messages_content = []
+
+    if image_path and Path(image_path).exists():
+        img_b64, media_type = _encode_image(image_path)
+        messages_content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{media_type};base64,{img_b64}"}
+        })
+
+    messages_content.append({"type": "text", "text": prompt})
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(
+                    f"{settings.NVIDIA_BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.NVIDIA_API_KEY}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": settings.NVIDIA_MODEL,
+                        "max_tokens": 2048,
+                        "messages": [{"role": "user", "content": messages_content}],
+                        "temperature": 0.2,
+                        "top_p": 0.7
+                    }
+                )
+                
+                if response.status_code == 429:
+                    wait_time = (2 ** attempt) + 2
+                    logger.warning("NVIDIA NIM rate limit hit (429). Retrying in %ds... (Attempt %d/%d)", 
+                                   wait_time, attempt + 1, max_retries)
+                    await asyncio.sleep(wait_time)
+                    continue
+                
+                response.raise_for_status()
+                data = response.json()
+                text = data["choices"][0]["message"]["content"]
+                logger.info("NVIDIA NIM response received successfully (status: %d)", response.status_code)
+                logger.info("NIM AI Result: %s", text[:300] + "..." if len(text) > 300 else text)
+                return _parse_json_response(text)
+                
+        except Exception as e:
+            if attempt == max_retries - 1:
+                logger.error("NVIDIA NIM call failed after %d attempts: %s", max_retries, e)
+                raise
+            wait_time = (2 ** attempt) + 2
+            logger.warning("NVIDIA NIM call attempt %d failed: %s. Retrying in %ds...", 
+                           attempt + 1, e, wait_time)
+            await asyncio.sleep(wait_time)
+    
+    # Should not reach here if retries work or raise
+    return _mock_analysis(image_path, error="Max retries reached")
+
+
 async def _call_gemini(image_path: Optional[str], prompt: str) -> Dict[str, Any]:
     """Call Google Gemini 1.5 Flash (free tier friendly)."""
     try:
         genai.configure(api_key=settings.GOOGLE_API_KEY)
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash")
         
         content = [prompt]
         if image_path and Path(image_path).exists():

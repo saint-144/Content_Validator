@@ -125,25 +125,32 @@ async def run_validation(db: Session, validation_id: int):
             llm_score = float(llm_match.get("llm_similarity_score", 0))
             is_suspected = bool(llm_match.get("is_suspected_match", llm_score >= settings.SUSPECTED_MATCH_THRESHOLD))
 
-            # Pixel similarity for images
+            # 7.1. pHash similarity for images (20% of overall)
+            phash_score = 0.0
+            if dest_type == "image" and tf.file_type == "image" and dest_phash and tf.phash:
+                phash_score = phash_similarity(dest_phash, tf.phash)
+
+            # 7.2. Pixel similarity for images (20% of overall)
             pixel_score = 0.0
             is_exact_pixel = False
-            if dest_type == "image" and tf.file_type == "image" and dest_phash and tf.phash:
-                pixel_score = phash_similarity(dest_phash, tf.phash)
-                # For exact match, also do pixel-level comparison if pHash is very close
-                if pixel_score >= 90 and dest_path and tf.file_path:
+            if dest_type == "image" and tf.file_type == "image":
+                # Compute pixel similarity if phash is decent (optimization)
+                if phash_score >= 70 and dest_path and tf.file_path:
                     try:
                         pixel_score = pixel_similarity(dest_path, tf.file_path)
                         is_exact_pixel = pixel_score >= settings.PIXEL_MATCH_THRESHOLD
                     except Exception:
                         pass
+                else:
+                    # If phash is low, use phash score as fallback for pixel
+                    pixel_score = phash_score
 
-            # Semantic score from LLM (0-100)
+            # 7.3. Semantic score from LLM (60% of overall)
             semantic_score = llm_score
 
-            # Weighted overall
-            overall = (semantic_score * 0.55) + (pixel_score * 0.30) + (semantic_score * 0.15)
-            overall = min(100.0, overall)
+            # Weighted overall: 60% Semantic, 20% pHash, 20% Pixel
+            overall = (float(semantic_score) * 0.60) + (float(phash_score) * 0.20) + (float(pixel_score) * 0.20)
+            overall = float(min(100.0, overall))
 
             if is_suspected or overall >= settings.SUSPECTED_MATCH_THRESHOLD:
                 is_suspected = True
@@ -151,12 +158,17 @@ async def run_validation(db: Session, validation_id: int):
             if is_exact_pixel:
                 exact_count += 1
 
+            logger.info(
+                "Match Analysis [%s]: Semantic=%.1f, pHash=%.1f, Pixel=%.1f -> Overall=%.1f (Suspected=%s, Exact=%s)",
+                tf.original_name, semantic_score, phash_score, pixel_score, overall, is_suspected, is_exact_pixel
+            )
             match = ValidationMatch(
                 validation_id=validation.id,
                 template_file_id=tf.id,
                 template_file_name=tf.original_name,
                 llm_similarity_score=round(llm_score, 2),
                 pixel_similarity_score=round(pixel_score, 2),
+                phash_similarity_score=round(phash_score, 2),
                 semantic_similarity_score=round(semantic_score, 2),
                 overall_similarity_score=round(overall, 2),
                 is_suspected_match=is_suspected,
@@ -170,12 +182,19 @@ async def run_validation(db: Session, validation_id: int):
         # 8. Override verdict based on match findings
         if exact_count > 0:
             validation.overall_verdict = "appropriate"
-        elif suspected_count == 0 and len(trained_files) > 0:
-            if validation.overall_verdict == "appropriate":
-                validation.overall_verdict = "need_review"
-
-        if not validation.mcc_compliant:
+            validation.mcc_compliant = True # Matching approved template = Compliant
+        elif suspected_count > 0:
+            validation.overall_verdict = "need_review"
+        else:
+            # 0 matches = Not approved content
             validation.overall_verdict = "escalate"
+            validation.mcc_compliant = False
+            validation.error_message = "No matching approved template found for this content."
+
+        # Final rule: if LLM explicitly found MCC issues, override to escalate
+        if llm_result.get("mcc_compliant") is False:
+            validation.overall_verdict = "escalate"
+            validation.mcc_compliant = False
 
         # 9. Complete validation
         elapsed_ms = int((time.time() - start_time) * 1000)
@@ -216,6 +235,41 @@ async def run_validation(db: Session, validation_id: int):
         db.commit()
 
 
+async def update_template_status(db: Session, template_id: int) -> str:
+    """
+    Re-calculate and update the overall status of a template based on its files.
+    Returns the new status.
+    """
+    template = db.query(Template).filter(Template.id == template_id).first()
+    if not template:
+        return "error"
+    
+    all_files = db.query(TemplateFile).filter(TemplateFile.template_id == template_id).all()
+    total_count = len(all_files)
+    done_count = sum(1 for f in all_files if f.processing_status == "done")
+    error_count = sum(1 for f in all_files if f.processing_status == "error")
+    working_count = sum(1 for f in all_files if f.processing_status in ["pending", "processing"])
+    
+    template.file_count = total_count
+    
+    if total_count == 0:
+        template.status = "draft"
+    elif working_count == 0:
+        # All files finished processing
+        if done_count > 0:
+            template.status = "ready"
+            template.trained_at = datetime.utcnow()
+        else:
+            template.status = "error"
+    else:
+        template.status = "training"
+    
+    db.commit()
+    logger.info("Template %d status updated to %s (Done: %d, Working: %d, Error: %d)", 
+                template_id, template.status, done_count, working_count, error_count)
+    return template.status
+
+
 async def train_template_file(db: Session, template_file_id: int):
     """Process a single template file: compute hashes and call LLM for analysis."""
     from app.services.llm_service import analyze_content_for_training
@@ -248,9 +302,9 @@ async def train_template_file(db: Session, template_file_id: int):
             file_name=tf.original_name
         )
 
-        tf.llm_summary = result.get("summary", "")
+        tf.llm_summary = str(result.get("summary", ""))
         tf.visual_elements = result
-        tf.detected_text = result.get("detected_text", "")
+        tf.detected_text = str(result.get("detected_text", ""))
         tf.color_palette = result.get("color_palette", [])
         tf.processing_status = "done"
 
@@ -260,27 +314,11 @@ async def train_template_file(db: Session, template_file_id: int):
         tf.processing_error = str(e)
 
     finally:
-        # Update template status based on all its files
-        template = db.query(Template).filter(Template.id == tf.template_id).first()
-        if template:
-            all_files = db.query(TemplateFile).filter(TemplateFile.template_id == tf.template_id).all()
-            total_count = len(all_files)
-            done_count = sum(1 for f in all_files if f.processing_status == "done")
-            working_count = sum(1 for f in all_files if f.processing_status in ["pending", "processing"])
-
-            template.file_count = total_count
-            if working_count == 0:
-                # All files finished processing (either done or error)
-                if done_count > 0:
-                    template.status = "ready"
-                    template.trained_at = datetime.utcnow()
-                else:
-                    template.status = "error"
-            else:
-                template.status = "training"
-
+        # Commit file changes first
         db.commit()
-
+        # Update template status
+        await update_template_status(db, tf.template_id)
+        
         # Cleanup video thumbnail if it was created
         if 'analysis_path' in locals() and analysis_path and analysis_path != file_path:
             cleanup_temp_file(analysis_path)

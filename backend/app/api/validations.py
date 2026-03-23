@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from typing import Optional, List
 from datetime import datetime
 import io
+import asyncio
 
 from app.models.database import get_db
 from app.models.models import Validation, ValidationMatch, Template, Report
@@ -14,6 +15,9 @@ from app.services.export_service import export_validations_to_excel
 from app.config import settings
 
 router = APIRouter(prefix="/api/validations", tags=["Validations"])
+
+# Concurrency control for validation (Turbo Mode)
+validation_semaphore = asyncio.Semaphore(5)
 
 
 @router.get("", response_model=List[ValidationOut])
@@ -50,7 +54,6 @@ async def validate_upload(
     post_description: Optional[str] = Form(None),
     post_platform: Optional[str] = Form(None),
     file: UploadFile = File(...),
-    background_tasks: BackgroundTasks = BackgroundTasks(),
     db: Session = Depends(get_db)
 ):
     template = db.query(Template).filter(Template.id == template_id).first()
@@ -93,16 +96,15 @@ async def validate_upload(
     db.commit()
     db.refresh(validation)
 
-    val_id = validation.id
-    background_tasks.add_task(_run_validation_background, val_id)
+    # Use asyncio.create_task for immediate background execution
+    asyncio.create_task(_run_validation_background(validation.id))
 
-    return {"validation_id": val_id, "status": "processing", "message": "Validation started"}
+    return {"validation_id": validation.id, "status": "processing", "message": "Validation started in parallel"}
 
 
 @router.post("/url")
 async def validate_url(
     data: ValidationCreateURL,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
     template = db.query(Template).filter(Template.id == data.template_id).first()
@@ -127,10 +129,10 @@ async def validate_url(
     db.commit()
     db.refresh(validation)
 
-    val_id = validation.id
-    background_tasks.add_task(_run_validation_background, val_id)
+    # Use asyncio.create_task for immediate background execution
+    asyncio.create_task(_run_validation_background(validation.id))
 
-    return {"validation_id": val_id, "status": "processing", "message": "Validation started"}
+    return {"validation_id": validation.id, "status": "processing", "message": "Validation started in parallel"}
 
 
 @router.get("/{validation_id}/status")
@@ -149,9 +151,17 @@ def get_validation_status(validation_id: int, db: Session = Depends(get_db)):
 
 
 async def _run_validation_background(validation_id: int):
-    from app.models.database import SessionLocal
-    db = SessionLocal()
-    try:
-        await run_validation(db, validation_id)
-    finally:
-        db.close()
+    async with validation_semaphore:
+        print(f"DEBUG: Starting background validation for ID: {validation_id}")
+        from app.models.database import SessionLocal
+        db = SessionLocal()
+        try:
+            print(f"DEBUG: Session acquired for validation {validation_id}, calling run_validation...")
+            await run_validation(db, validation_id)
+            print(f"DEBUG: Completed validation for ID: {validation_id}")
+        except Exception as e:
+            print(f"DEBUG: VALIDATION BACKGROUND ERROR for ID {validation_id}: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            db.close()

@@ -42,7 +42,6 @@ def create_template(data: TemplateCreate, db: Session = Depends(get_db)):
 async def upload_template_files(
     template_id: int,
     files: List[UploadFile] = File(...),
-    background_tasks: BackgroundTasks = BackgroundTasks(),
     db: Session = Depends(get_db)
 ):
     template = db.query(Template).filter(Template.id == template_id).first()
@@ -81,31 +80,40 @@ async def upload_template_files(
         template.status = "training"
         db.commit()
 
-        # Queue training in background
-        tf_id = tf.id
-        background_tasks.add_task(_train_file_background, tf_id)
-        uploaded.append({"id": tf.id, "file_name": file.filename, "status": "queued_for_training"})
+        # Create task directly on the event loop for immediate execution
+        asyncio.create_task(_train_file_background(tf.id))
+        uploaded.append({"id": tf.id, "file_name": file.filename, "status": "training_started"})
 
-    return {"uploaded": len(uploaded), "files": uploaded, "message": "Files uploaded and training started"}
+    return {"uploaded": len(uploaded), "files": uploaded, "message": "Files uploaded and parallel training started"}
 
+
+# Concurrency control for LLM calls (Turbo Mode)
+training_semaphore = asyncio.Semaphore(5)
 
 async def _train_file_background(template_file_id: int):
-    """Background task to train a single template file."""
-    from app.models.database import SessionLocal
-    db = SessionLocal()
-    try:
-        await train_template_file(db, template_file_id)
-    finally:
-        db.close()
+    """Background task to train a single template file with concurrency control."""
+    async with training_semaphore:
+        print(f"DEBUG: Starting background training for file ID: {template_file_id}")
+        from app.models.database import SessionLocal
+        db = SessionLocal()
+        try:
+            print(f"DEBUG: Session acquired for file {template_file_id}, calling train_template_file...")
+            await train_template_file(db, template_file_id)
+            print(f"DEBUG: Completed training for file {template_file_id}")
+        except Exception as e:
+            print(f"DEBUG: BACKGROUND TASK ERROR for file {template_file_id}: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            db.close()
 
 
 @router.post("/{template_id}/train")
 async def retrain_template(
     template_id: int,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
-    """Retrain all files in a template."""
+    """Retrain all files in a template using asyncio.create_task for immediate execution."""
     template = db.query(Template).filter(Template.id == template_id).first()
     if not template:
         raise HTTPException(404, "Template not found")
@@ -119,10 +127,11 @@ async def retrain_template(
         tf.processing_status = "pending"
     db.commit()
 
+    # Create tasks directly on the event loop for immediate execution
     for tf in files:
-        background_tasks.add_task(_train_file_background, tf.id)
+        asyncio.create_task(_train_file_background(tf.id))
 
-    return {"message": f"Retraining {len(files)} files", "template_id": template_id}
+    return {"message": f"Retraining {len(files)} files started in parallel", "template_id": template_id}
 
 
 @router.delete("/{template_id}")
@@ -150,3 +159,11 @@ def delete_template_file(template_id: int, file_id: int, db: Session = Depends(g
         template.file_count = db.query(TemplateFile).filter(TemplateFile.template_id == template_id).count() - 1
     db.commit()
     return {"message": "File deleted"}
+
+
+@router.post("/{template_id}/sync")
+async def sync_template_status(template_id: int, db: Session = Depends(get_db)):
+    """Manually re-calculate and sync template status."""
+    from app.services.validation_service import update_template_status
+    new_status = await update_template_status(db, template_id)
+    return {"message": "Template status synced", "status": new_status, "template_id": template_id}
