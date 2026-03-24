@@ -87,23 +87,59 @@ async def upload_template_files(
     return {"uploaded": len(uploaded), "files": uploaded, "message": "Files uploaded and parallel training started"}
 
 
-# Concurrency control for LLM calls (Turbo Mode)
-training_semaphore = asyncio.Semaphore(5)
+# Concurrency control for LLM calls (Safe Mode: 3 parallel to stay under 40 RPM)
+training_semaphore = asyncio.Semaphore(3)
 
 async def _train_file_background(template_file_id: int):
-    """Background task to train a single template file with concurrency control."""
+    """Background task to train a single template file with retry logic and concurrency control."""
     async with training_semaphore:
         print(f"DEBUG: Starting background training for file ID: {template_file_id}")
         from app.models.database import SessionLocal
+        
+        max_retries = 3
+        retry_count = 0
+        last_error = ""
+
+        while retry_count < max_retries:
+            db = SessionLocal()
+            try:
+                print(f"DEBUG: Attempt {retry_count+1} for file {template_file_id}")
+                await train_template_file(db, template_file_id)
+                
+                # Check if it succeeded
+                tf = db.query(TemplateFile).filter(TemplateFile.id == template_file_id).first()
+                if tf and tf.processing_status == "done":
+                    print(f"DEBUG: Successfully trained file {template_file_id} on attempt {retry_count+1}")
+                    return # SUCCESS
+                else:
+                    last_error = tf.processing_error if tf else "Unknown error"
+                    print(f"DEBUG: File {template_file_id} in error state: {last_error}")
+
+            except Exception as e:
+                last_error = str(e)
+                print(f"DEBUG: Training attempt {retry_count+1} failed for file {template_file_id}: {e}")
+            finally:
+                db.close()
+            
+            retry_count += 1
+            if retry_count < max_retries:
+                # Exponential backoff: 2, 4 seconds
+                wait_time = 2 ** retry_count
+                print(f"DEBUG: Waiting {wait_time}s before retry {retry_count+1}")
+                await asyncio.sleep(wait_time)
+
+        # If we reach here, all retries failed
+        print(f"DEBUG: ALL RETRIES FAILED for file {template_file_id}. Final error: {last_error}")
         db = SessionLocal()
         try:
-            print(f"DEBUG: Session acquired for file {template_file_id}, calling train_template_file...")
-            await train_template_file(db, template_file_id)
-            print(f"DEBUG: Completed training for file {template_file_id}")
-        except Exception as e:
-            print(f"DEBUG: BACKGROUND TASK ERROR for file {template_file_id}: {e}")
-            import traceback
-            traceback.print_exc()
+            tf = db.query(TemplateFile).filter(TemplateFile.id == template_file_id).first()
+            if tf:
+                tf.processing_status = "error"
+                tf.processing_error = f"Failed after {max_retries} attempts. Last error: {last_error}"
+                # Also set the template to error
+                from app.services.validation_service import update_template_status
+                await update_template_status(db, tf.template_id)
+            db.commit()
         finally:
             db.close()
 

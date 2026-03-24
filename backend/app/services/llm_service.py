@@ -34,31 +34,31 @@ def _encode_image(file_path: str) -> tuple[str, str]:
 async def analyze_content_for_training(file_path: str, file_type: str, file_name: str) -> Dict[str, Any]:
     """
     Stage 1 – Training:
-    Ask the LLM to describe and summarize an approved content file so we can
-    store a rich semantic representation for later comparison.
+    Ask the LLM to describe and summarize an approved content file.
+    For videos, the file_path should be a pre-extracted key frame (thumbnail).
     """
-    if file_type == "video":
-        # For video: use first extracted frame (caller should pass frame path)
-        # Fall back to text-only description
-        return await _analyze_video_description(file_name)
+    # Unified high-quality description prompt for both images and video frames
+    type_label = "video frame" if file_type == "video" else "marketing image"
+    
+    prompt = f"""Analyze this approved {type_label} carefully. 
+Provide a rich, technical, and semantic description so we can identify this content even if it's slightly modified later.
 
-    prompt = f"""Analyze this approved marketing/brand content image carefully.
 Provide a detailed structured analysis in valid JSON format with these exact fields:
 
 {{
-  "summary": "2-3 sentence description of the overall content and message",
-  "visual_elements": ["list of key visual elements: logos, products, people, objects, text blocks"],
-  "color_palette": ["primary hex colors or color names visible"],
-  "detected_text": "all text visible in the image, verbatim",
-  "brand_elements": ["brand-specific elements: logos, watermarks, mascots, slogans"],
-  "content_type": "one of: advertisement, social_post, banner, video_thumbnail, product_image, promotional",
-  "mood_tone": "professional/casual/urgent/fun/etc",
-  "compliance_flags": ["any elements that might be compliance concerns"],
-  "key_identifiers": ["unique distinguishing features that would identify this specific creative"]
+  "summary": "2-3 sentence deep description. Include the focal point, visual style, and core message. Avoid generic phrases.",
+  "visual_elements": ["List specific objects, products, people, mascots, and composition details"],
+  "color_palette": ["Identify the dominant hex colors and the overall lighting/mood"],
+  "detected_text": "Extract ALL text visible, including small disclaimers or call-to-actions",
+  "brand_elements": ["Identify logos, brand colors, specific fonts, or trademarked assets"],
+  "content_type": "advertisement, social_post, banner, product, or lifestyle",
+  "mood_tone": "The emotional feel: energetic, luxury, professional, nostalgic, etc.",
+  "compliance_flags": ["Elements that might be regulated: financial claims, age-restricted items, etc."],
+  "key_identifiers": ["Unique markers that would distinguish this from other similar brand files"]
 }}
 
-File name for reference: {file_name}
-Return ONLY the JSON object, no other text."""
+Reference filename: {file_name}
+Return ONLY the JSON object. Do not include conversational text or headers."""
 
     return await _call_llm_vision(file_path, prompt)
 
@@ -301,19 +301,7 @@ async def _call_gemini(image_path: Optional[str], prompt: str) -> Dict[str, Any]
         raise
 
 
-async def _analyze_video_description(file_name: str) -> Dict[str, Any]:
-    """For video files without frame extraction, return structured placeholder."""
-    return {
-        "summary": f"Video content: {file_name}",
-        "visual_elements": ["video content"],
-        "color_palette": [],
-        "detected_text": "",
-        "brand_elements": [],
-        "content_type": "video",
-        "mood_tone": "unknown",
-        "compliance_flags": [],
-        "key_identifiers": [file_name]
-    }
+    return await _call_llm_vision(file_path, prompt)
 
 
 async def analyze_from_url(url: str) -> Dict[str, Any]:

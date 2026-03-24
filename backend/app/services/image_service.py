@@ -102,6 +102,80 @@ def extract_video_thumbnail(video_path: str) -> Optional[str]:
     return None
 
 
+def extract_video_hash_sequence(video_path: str, interval_sec: float = 1.0) -> list[str]:
+    """
+    Extract perceptual hash for frames at regular intervals.
+    Returns a list of hex strings.
+    """
+    hashes = []
+    try:
+        import cv2
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps <= 0: fps = 24.0 # Fallback
+        
+        frame_interval = int(fps * interval_sec)
+        frame_count = 0
+        
+        while True:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_count)
+            success, frame = cap.read()
+            if not success:
+                break
+            
+            # Convert OpenCV BGR to Pillow RGB
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(rgb_frame)
+            
+            h = str(imagehash.phash(pil_img))
+            hashes.append(h)
+            
+            frame_count += frame_interval
+        
+        cap.release()
+    except Exception as e:
+        logger.error("Video hash sequence extraction failed for %s: %s", video_path, e)
+    
+    return hashes
+
+
+def video_similarity_dtw(seq1: list[str], seq2: list[str]) -> float:
+    """
+    Compute similarity between two hash sequences using Dynamic Time Warping.
+    Uses Hamming distance between pHashes as the cost.
+    Returns 0-100 score.
+    """
+    if not seq1 or not seq2:
+        return 0.0
+
+    # Convert hex hashes to actual hash objects once
+    try:
+        h1 = [imagehash.hex_to_hash(s) for s in seq1]
+        h2 = [imagehash.hex_to_hash(s) for s in seq2]
+    except Exception:
+        return 0.0
+
+    n, m = len(h1), len(h2)
+    # Initialize DP table with infinity
+    dtw = np.full((n + 1, m + 1), float('inf'))
+    dtw[0, 0] = 0
+
+    # Fill table
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            cost = float(h1[i-1] - h2[j-1]) # Hamming distance
+            dtw[i, j] = cost + min(dtw[i-1, j],    # insertion
+                                   dtw[i, j-1],    # deletion
+                                   dtw[i-1, j-1])  # match
+
+    # Normalized distance (avg cost per frame)
+    max_possible_dist = 64.0
+    avg_distance = dtw[n, m] / max(n, m)
+    
+    similarity = max(0.0, (max_possible_dist - avg_distance) / max_possible_dist * 100)
+    return round(float(similarity), 2)
+
+
 def compute_file_hash(file_path: str) -> str:
     """Compute SHA256 hash of file for deduplication."""
     sha256 = hashlib.sha256()

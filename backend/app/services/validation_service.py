@@ -20,7 +20,8 @@ from app.models.models import Validation, ValidationMatch, TemplateFile, Templat
 from app.services.llm_service import compare_content, analyze_from_url
 from app.services.image_service import (
     compute_phash, phash_similarity, pixel_similarity,
-    save_upload, get_file_type, extract_video_thumbnail, cleanup_temp_file
+    save_upload, get_file_type, extract_video_thumbnail, 
+    extract_video_hash_sequence, video_similarity_dtw, cleanup_temp_file
 )
 from app.config import settings
 
@@ -65,12 +66,17 @@ async def run_validation(db: Session, validation_id: int):
         if dest_type == "image" and dest_path:
             dest_phash = compute_phash(dest_path)
 
-        # For video, extract thumbnail
+        # For video, extract thumbnail and hash sequence
         dest_analysis_path = dest_path
+        dest_video_sequence = None
         if dest_type == "video" and dest_path:
+            # 1. Thumbnail for LLM
             thumb = extract_video_thumbnail(dest_path)
             if thumb:
                 dest_analysis_path = thumb
+            
+            # 2. Sequence for DTW
+            dest_video_sequence = extract_video_hash_sequence(dest_path)
 
         # 4. Build template file context for LLM
         template_context = [
@@ -125,16 +131,42 @@ async def run_validation(db: Session, validation_id: int):
             llm_score = float(llm_match.get("llm_similarity_score", 0))
             is_suspected = bool(llm_match.get("is_suspected_match", llm_score >= settings.SUSPECTED_MATCH_THRESHOLD))
 
-            # 7.1. pHash similarity for images (20% of overall)
+            # 7.1. pHash/Sequence similarity (Main similarity component)
             phash_score = 0.0
-            if dest_type == "image" and tf.file_type == "image" and dest_phash and tf.phash:
-                phash_score = phash_similarity(dest_phash, tf.phash)
+            
+            if dest_type == "video" and tf.file_type == "video":
+                # Video-to-Video: DTW on hash sequences
+                if dest_video_sequence and tf.embedding and isinstance(tf.embedding, list):
+                    phash_score = video_similarity_dtw(dest_video_sequence, tf.embedding)
+                else:
+                    # Fallback to single thumbnail phash if sequence missing
+                    phash_score = phash_similarity(dest_phash, tf.phash) if dest_phash and tf.phash else 0.0
+            
+            elif dest_type == "video" and tf.file_type == "image":
+                # Video-to-Image: DTW with the image as a 1-frame sequence
+                if dest_video_sequence and tf.phash:
+                    phash_score = video_similarity_dtw(dest_video_sequence, [tf.phash])
+                else:
+                    phash_score = phash_similarity(dest_phash, tf.phash) if dest_phash and tf.phash else 0.0
 
-            # 7.2. Pixel similarity for images (20% of overall)
+            elif dest_type == "image" and tf.file_type == "video":
+                # Image-to-Video: DTW with the image as a 1-frame sequence
+                if dest_phash and tf.embedding and isinstance(tf.embedding, list):
+                    phash_score = video_similarity_dtw([dest_phash], tf.embedding)
+                else:
+                    phash_score = phash_similarity(dest_phash, tf.phash) if dest_phash and tf.phash else 0.0
+            
+            elif dest_type == "image" and tf.file_type == "image":
+                # Image-to-Image: Standard Hamming distance
+                if dest_phash and tf.phash:
+                    phash_score = phash_similarity(dest_phash, tf.phash)
+
+            # 7.2. Technical Consistency/Pixel (Override for videos)
             pixel_score = 0.0
             is_exact_pixel = False
+            
             if dest_type == "image" and tf.file_type == "image":
-                # Compute pixel similarity if phash is decent (optimization)
+                # Image-to-Image: Compute pixel similarity
                 if phash_score >= 70 and dest_path and tf.file_path:
                     try:
                         pixel_score = pixel_similarity(dest_path, tf.file_path)
@@ -142,14 +174,29 @@ async def run_validation(db: Session, validation_id: int):
                     except Exception:
                         pass
                 else:
-                    # If phash is low, use phash score as fallback for pixel
                     pixel_score = phash_score
+            else:
+                # Video involved: Use phash sequence as pixel/consistency fallback
+                pixel_score = phash_score
 
-            # 7.3. Semantic score from LLM (60% of overall)
+            # 7.3. Semantic score from LLM
             semantic_score = llm_score
 
-            # Weighted overall: 60% Semantic, 20% pHash, 20% Pixel
-            overall = (float(semantic_score) * 0.60) + (float(phash_score) * 0.20) + (float(pixel_score) * 0.20)
+            # 7.4. Final Weighted Combine
+            if dest_type == "video":
+                # VIDEO WEIGHTING (75% Math / 25% AI)
+                # 75% Tech (phash_score/pixel_score) + 25% AI (semantic_score)
+                overall = (float(semantic_score) * 0.25) + (float(phash_score) * 0.75)
+                
+                # TECHNICAL OVERRIDE: If Math > 95%, Trust Math, Skip AI.
+                if phash_score >= 95.0:
+                    overall = 100.0
+                    is_suspected = True
+                    is_exact_pixel = True # Treat as perfect match
+            else:
+                # IMAGE WEIGHTING (60% AI / 40% Math)
+                overall = (float(semantic_score) * 0.60) + (float(phash_score) * 0.20) + (float(pixel_score) * 0.20)
+            
             overall = float(min(100.0, overall))
 
             if is_suspected or overall >= settings.SUSPECTED_MATCH_THRESHOLD:
@@ -159,8 +206,8 @@ async def run_validation(db: Session, validation_id: int):
                 exact_count += 1
 
             logger.info(
-                "Match Analysis [%s]: Semantic=%.1f, pHash=%.1f, Pixel=%.1f -> Overall=%.1f (Suspected=%s, Exact=%s)",
-                tf.original_name, semantic_score, phash_score, pixel_score, overall, is_suspected, is_exact_pixel
+                "Match Analysis [%s] Type=[%s]: Semantic=%.1f, Tech/Seq=%.1f -> Overall=%.1f (Suspected=%s, Exact=%s)",
+                tf.original_name, dest_type, semantic_score, phash_score, overall, is_suspected, is_exact_pixel
             )
             match = ValidationMatch(
                 validation_id=validation.id,
@@ -294,6 +341,12 @@ async def train_template_file(db: Session, template_file_id: int):
         # Compute pHash for images
         if tf.file_type == "image" and tf.file_path:
             tf.phash = compute_phash(tf.file_path)
+        
+        # Compute hash sequence for videos
+        if tf.file_type == "video" and tf.file_path:
+            tf.phash = compute_phash(analysis_path) # Use thumb as main phash
+            # Extract full sequence for DTW comparison
+            tf.embedding = extract_video_hash_sequence(tf.file_path)
 
         # LLM analysis
         result = await analyze_content_for_training(
