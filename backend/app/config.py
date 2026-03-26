@@ -4,7 +4,7 @@ from functools import lru_cache
 
 class Settings(BaseSettings):
     # Database
-    DATABASE_URL: str = "mysql+pymysql://root:Validator@2024@localhost:3306/content_validator"
+    DATABASE_URL: str = "mysql+pymysql://root:Validator%402024@localhost:3306/content_validator"
     
     # LLM Provider: "anthropic", "openai", "gemini", or "nvidia"
     LLM_PROVIDER: str = "nvidia"

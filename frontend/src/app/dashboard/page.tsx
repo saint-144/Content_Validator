@@ -201,7 +201,13 @@ export default function DashboardPage() {
                     <td style={{ color:'#6b7280' }}>#{v.id}</td>
                     <td>{v.template_name}</td>
                     <td style={{ maxWidth:200, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                      {v.input_file_name}
+                      {v.input_url ? (
+                        <a href={v.input_url} target="_blank" rel="noopener noreferrer" style={{ color:'#6366f1', textDecoration:'underline' }}>
+                          URL
+                        </a>
+                      ) : (
+                        v.input_file_name
+                      )}
                     </td>
                     <td>
                       <span className={`badge badge-${v.verdict}`}>{verdictLabel(v.verdict || '')}</span>

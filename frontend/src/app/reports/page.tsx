@@ -235,6 +235,14 @@ export default function ReportsPage() {
                       <span style={{ color:'#d1d5db' }}>{selected.validation.post_description}</span>
                     </div>
                   )}
+                  {selected.validation.input_url && (
+                    <div style={{ marginTop:4 }}>
+                      <span style={{ color:'#6b7280' }}>Public URL: </span>
+                      <a href={selected.validation.input_url} target="_blank" rel="noopener noreferrer" style={{ color:'#6366f1', textDecoration:'underline' }}>
+                        {selected.validation.input_url}
+                      </a>
+                    </div>
+                  )}
                 </div>
               )}
 

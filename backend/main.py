@@ -8,6 +8,7 @@ from app.models.database import create_tables
 from app.api.templates import router as templates_router
 from app.api.validations import router as validations_router
 from app.api.reports import reports_router, dashboard_router
+from app.api.auth import router as auth_router
 
 app = FastAPI(
     title="Content Validation Platform API",
@@ -26,6 +27,7 @@ app.add_middleware(
 )
 
 # Register routers
+app.include_router(auth_router)
 app.include_router(templates_router)
 app.include_router(validations_router)
 app.include_router(reports_router)

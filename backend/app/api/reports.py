@@ -7,9 +7,10 @@ from datetime import datetime, timedelta
 import io
 
 from app.models.database import get_db
-from app.models.models import Report, Validation, ValidationMatch, Template, TemplateFile
+from app.models.models import Report, Validation, ValidationMatch, Template, TemplateFile, User
 from app.schemas.schemas import ReportOut, DashboardStats
 from app.services.export_service import export_validations_to_excel
+from app.api.deps import get_current_user, get_current_admin_user
 
 reports_router = APIRouter(prefix="/api/reports", tags=["Reports"])
 dashboard_router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
@@ -23,7 +24,8 @@ def list_reports(
     to_date: Optional[str] = None,
     page: int = 1,
     page_size: int = 50,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     q = db.query(Report).join(Validation)
     if template_id:
@@ -42,7 +44,8 @@ def export_reports(
     template_id: Optional[int] = None,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Export all validation reports to Excel."""
     q = db.query(Validation).options(
@@ -70,6 +73,7 @@ def export_reports(
             "overall_verdict": v.overall_verdict or "need_review",
             "mcc_compliant": v.mcc_compliant,
             "created_at": str(v.created_at),
+            "post_url": v.input_url,
             "matches": [
                 {
                     "template_file_name": m.template_file_name,
@@ -95,7 +99,7 @@ def export_reports(
 
 
 @reports_router.get("/{report_id}/detail")
-def get_report_detail(report_id: int, db: Session = Depends(get_db)):
+def get_report_detail(report_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     report = db.query(Report).filter(Report.id == report_id).first()
     if not report:
         from fastapi import HTTPException
@@ -154,7 +158,7 @@ def get_report_detail(report_id: int, db: Session = Depends(get_db)):
 
 
 @dashboard_router.get("/stats")
-def get_dashboard_stats(db: Session = Depends(get_db)):
+def get_dashboard_stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     today = datetime.utcnow().date()
     thirty_days_ago = datetime.utcnow() - timedelta(days=30)
 
