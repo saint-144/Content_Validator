@@ -386,6 +386,14 @@ export default function ValidatePage() {
                     <span style={{ color:'#e2e8f0' }}>{result.post_platform}</span>
                   </div>
                 )}
+                {result.input_url && (
+                  <div>
+                    <span style={{ color:'#6b7280' }}>Public URL: </span>
+                    <a href={result.input_url} target="_blank" rel="noopener noreferrer" style={{ color:'#6366f1', textDecoration:'underline' }}>
+                      {result.input_url.slice(0, 40)}{result.input_url.length > 40 ? '...' : ''}
+                    </a>
+                  </div>
+                )}
                 <div>
                   <span style={{ color:'#6b7280' }}>Files Compared: </span>
                   <span style={{ color:'#e2e8f0' }}>{result.matches.length}</span>

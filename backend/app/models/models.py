@@ -5,6 +5,14 @@ from datetime import datetime
 
 Base = declarative_base()
 
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(255), nullable=False, unique=True)
+    hashed_password = Column(String(255), nullable=False)
+    role = Column(Enum('admin','user'), default='user')
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 class Template(Base):
     __tablename__ = "templates"
     id = Column(Integer, primary_key=True, autoincrement=True)
