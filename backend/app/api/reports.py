@@ -7,10 +7,10 @@ from datetime import datetime, timedelta
 import io
 
 from app.models.database import get_db
-from app.models.models import Report, Validation, ValidationMatch, Template, TemplateFile, User
+from app.models.models import Report, Validation, ValidationMatch, Template, TemplateFile
 from app.schemas.schemas import ReportOut, DashboardStats
 from app.services.export_service import export_validations_to_excel
-from app.api.deps import get_current_user, get_current_admin_user
+from app.api.deps import get_current_user, get_current_admin_user, require_roles, CurrentUser
 
 reports_router = APIRouter(prefix="/api/reports", tags=["Reports"])
 dashboard_router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
@@ -22,12 +22,27 @@ def list_reports(
     verdict: Optional[str] = None,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    all_reports: bool = Query(False, alias="all"),
+    user_id: Optional[int] = Query(None, alias="user"),
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_roles(["admin", "user"]))
 ):
     q = db.query(Report).join(Validation)
+    
+    # RBAC: Regular users only see their own reports unless explicitly allowed (not here)
+    if current_user.role != "admin":
+        q = q.filter(Report.created_by == current_user.id)
+    else:
+        # Admin can view all or filter by specific user
+        if not all_reports and user_id is None:
+            # Default for admin: still show all? User said "Reports endpoint should default to returning the requesting user's reports"
+            q = q.filter(Report.created_by == current_user.id)
+        elif user_id:
+            q = q.filter(Report.created_by == user_id)
+        # if all=true and admin, show all (no filter)
+
     if template_id:
         q = q.filter(Validation.template_id == template_id)
     if verdict:
@@ -45,7 +60,7 @@ def export_reports(
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_roles(["admin", "user"]))
 ):
     """Export all validation reports to Excel."""
     q = db.query(Validation).options(
@@ -99,7 +114,7 @@ def export_reports(
 
 
 @reports_router.get("/{report_id}/detail")
-def get_report_detail(report_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def get_report_detail(report_id: int, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_roles(["admin", "user"]))):
     report = db.query(Report).filter(Report.id == report_id).first()
     if not report:
         from fastapi import HTTPException
@@ -158,7 +173,7 @@ def get_report_detail(report_id: int, db: Session = Depends(get_db), current_use
 
 
 @dashboard_router.get("/stats")
-def get_dashboard_stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def get_dashboard_stats(db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_roles(["admin", "user"]))):
     today = datetime.utcnow().date()
     thirty_days_ago = datetime.utcnow() - timedelta(days=30)
 

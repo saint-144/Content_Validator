@@ -148,7 +148,7 @@ If no API key is set, the system runs in **demo mode** — it returns mock simil
 Overall Score = (LLM Semantic Score × 55%) + (Pixel Hash Score × 30%) + (LLM Score × 15%)
 
 Thresholds (configurable in .env):
-  SUSPECTED_MATCH_THRESHOLD = 65%   → "is_suspected_match: true"
+  SUSPECTED_MATCH_THRESHOLD = 75%   → "is_suspected_match: true"
   PIXEL_MATCH_THRESHOLD     = 95%   → "is_exact_pixel_match: true"
   SEMANTIC_MATCH_THRESHOLD  = 72%   → LLM similarity threshold
 
@@ -221,5 +221,5 @@ UPLOAD_DIR=./uploads
 MAX_FILE_SIZE_MB=100
 PIXEL_MATCH_THRESHOLD=95
 SEMANTIC_MATCH_THRESHOLD=72
-SUSPECTED_MATCH_THRESHOLD=65
+SUSPECTED_MATCH_THRESHOLD=75
 ```

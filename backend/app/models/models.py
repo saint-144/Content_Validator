@@ -5,13 +5,7 @@ from datetime import datetime
 
 Base = declarative_base()
 
-class User(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    username = Column(String(255), nullable=False, unique=True)
-    hashed_password = Column(String(255), nullable=False)
-    role = Column(Enum('admin','user'), default='user')
-    created_at = Column(DateTime, default=datetime.utcnow)
+# User model removed - owned by Django auth, referenced via integer FK only
 
 class Template(Base):
     __tablename__ = "templates"
@@ -65,6 +59,7 @@ class Validation(Base):
     validation_status = Column(Enum('pending','processing','completed','error'), default='pending')
     error_message = Column(Text)
     processing_time_ms = Column(Integer)
+    created_by = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
     template = relationship("Template")
@@ -103,5 +98,6 @@ class Report(Base):
     exact_matches = Column(Integer, default=0)
     overall_verdict = Column(String(50))
     mcc_compliant = Column(Boolean, nullable=True)
+    created_by = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     validation = relationship("Validation", back_populates="report")

@@ -2,17 +2,18 @@
 Validation Service
 Orchestrates the full validation pipeline:
 1. Load trained template files
-2. Call LLM for semantic comparison
-3. Compute pixel similarity
-4. Combine scores and determine verdict
-5. Persist results and create report
+2. Pre-filter to top 30 by phash similarity (fast, no LLM cost)
+3. Call LLM for semantic comparison on top 30 only
+4. Compute pixel similarity
+5. Combine scores and determine verdict
+6. Persist results and create report
 """
 
 import logging
 import time
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 from sqlalchemy.orm import Session
 
@@ -20,12 +21,78 @@ from app.models.models import Validation, ValidationMatch, TemplateFile, Templat
 from app.services.llm_service import compare_content, analyze_from_url
 from app.services.image_service import (
     compute_phash, phash_similarity, pixel_similarity,
-    save_upload, get_file_type, extract_video_thumbnail, 
+    save_upload, get_file_type, extract_video_thumbnail,
     extract_video_hash_sequence, video_similarity_dtw, cleanup_temp_file
 )
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Top N files to send to LLM after phash pre-filter
+PHASH_PREFILTER_TOP_N = 30
+
+
+def _phash_prefilter(
+    trained_files: list,
+    dest_phash: Optional[str],
+    dest_video_sequence: Optional[list],
+    dest_type: str,
+    top_n: int = PHASH_PREFILTER_TOP_N
+) -> tuple[list, dict]:
+    """
+    Pre-filter trained files by phash/DTW similarity before sending to LLM.
+    Returns:
+        - top_n files sorted by phash score descending
+        - dict of {tf.id: phash_score} for all files (used later to skip recompute)
+    """
+    scored = []
+
+    for tf in trained_files:
+        score = 0.0
+
+        if dest_type == "video" and tf.file_type == "video":
+            if dest_video_sequence and tf.embedding and isinstance(tf.embedding, list):
+                score = video_similarity_dtw(dest_video_sequence, tf.embedding)
+            elif dest_phash and tf.phash:
+                score = phash_similarity(dest_phash, tf.phash)
+
+        elif dest_type == "video" and tf.file_type == "image":
+            if dest_video_sequence and tf.phash:
+                score = video_similarity_dtw(dest_video_sequence, [tf.phash])
+            elif dest_phash and tf.phash:
+                score = phash_similarity(dest_phash, tf.phash)
+
+        elif dest_type == "image" and tf.file_type == "video":
+            if dest_phash and tf.embedding and isinstance(tf.embedding, list):
+                score = video_similarity_dtw([dest_phash], tf.embedding)
+            elif dest_phash and tf.phash:
+                score = phash_similarity(dest_phash, tf.phash)
+
+        elif dest_type == "image" and tf.file_type == "image":
+            if dest_phash and tf.phash:
+                score = phash_similarity(dest_phash, tf.phash)
+
+        scored.append((tf, score))
+
+    # Sort by score descending
+    scored.sort(key=lambda x: x[1], reverse=True)
+
+    total = len(scored)
+    top = scored[:top_n]
+    dropped = total - len(top)
+
+    if dropped > 0:
+        logger.info(
+            "phash pre-filter: %d total files, sending top %d to LLM, dropped %d "
+            "(lowest phash scores: %.1f - %.1f)",
+            total, len(top), dropped,
+            scored[top_n][1] if top_n < total else 0,
+            scored[-1][1]
+        )
+
+    phash_scores = {tf.id: score for tf, score in scored}
+    top_files = [tf for tf, _ in top]
+    return top_files, phash_scores
 
 
 async def run_validation(db: Session, validation_id: int):
@@ -52,6 +119,11 @@ async def run_validation(db: Session, validation_id: int):
         if not trained_files:
             raise ValueError("Template has no trained files yet. Please train the template first.")
 
+        logger.info(
+            "Validation %d: template '%s' has %d trained files",
+            validation_id, template.name, len(trained_files)
+        )
+
         # 2. Get destination file path
         dest_path = validation.input_file_path
         dest_type = validation.input_file_type
@@ -61,24 +133,32 @@ async def run_validation(db: Session, validation_id: int):
             dest_path, dest_type = await analyze_from_url(validation.input_url)
             temp_file = dest_path
 
-        # 3. Compute pHash for destination
+        # 3. Compute pHash / video sequence for destination
         dest_phash = None
+        dest_analysis_path = dest_path
+        dest_video_sequence = None
+
         if dest_type == "image" and dest_path:
             dest_phash = compute_phash(dest_path)
 
-        # For video, extract thumbnail and hash sequence
-        dest_analysis_path = dest_path
-        dest_video_sequence = None
-        if dest_type == "video" and dest_path:
-            # 1. Thumbnail for LLM
+        elif dest_type == "video" and dest_path:
             thumb = extract_video_thumbnail(dest_path)
             if thumb:
                 dest_analysis_path = thumb
-            
-            # 2. Sequence for DTW
+                dest_phash = compute_phash(thumb)
             dest_video_sequence = extract_video_hash_sequence(dest_path)
 
-        # 4. Build template file context for LLM
+        # 4. phash pre-filter — fast, no LLM cost
+        # Scores ALL files, returns top 30 for LLM + full score map for later use
+        top_files, phash_score_map = _phash_prefilter(
+            trained_files=trained_files,
+            dest_phash=dest_phash,
+            dest_video_sequence=dest_video_sequence,
+            dest_type=dest_type,
+            top_n=PHASH_PREFILTER_TOP_N
+        )
+
+        # 5. Build template context for LLM (top 30 only)
         template_context = [
             {
                 "id": tf.id,
@@ -89,10 +169,10 @@ async def run_validation(db: Session, validation_id: int):
                 "brand_elements": (tf.visual_elements or {}).get("brand_elements", []) if isinstance(tf.visual_elements, dict) else [],
                 "phash": tf.phash or ""
             }
-            for tf in trained_files
+            for tf in top_files
         ]
 
-        # 5. Call LLM for semantic comparison
+        # 6. Call LLM for semantic comparison on top 30 only
         llm_result = await compare_content(
             destination_path=dest_analysis_path,
             destination_type=dest_type,
@@ -102,7 +182,7 @@ async def run_validation(db: Session, validation_id: int):
             semantic_threshold=settings.SEMANTIC_MATCH_THRESHOLD
         )
 
-        # 6. Update validation metadata from LLM
+        # 7. Update validation metadata from LLM
         if llm_result.get("post_timestamp_hint"):
             try:
                 from dateutil.parser import parse as parse_date
@@ -115,7 +195,7 @@ async def run_validation(db: Session, validation_id: int):
         validation.mcc_compliant = llm_result.get("mcc_compliant", True)
         validation.overall_verdict = llm_result.get("overall_verdict", "need_review")
 
-        # 7. Create per-file match records
+        # 8. Build LLM match lookup
         llm_file_matches = {
             m["file_name"]: m
             for m in llm_result.get("file_matches", [])
@@ -125,78 +205,61 @@ async def run_validation(db: Session, validation_id: int):
         suspected_count = 0
         exact_count = 0
 
+        # 9. Create match records for ALL trained files
+        # Top 30 get full LLM + phash scores
+        # Remaining files get phash-only scores with no LLM data
         for tf in trained_files:
-            llm_match = llm_file_matches.get(tf.original_name, {})
+            prefiltered_phash_score = phash_score_map.get(tf.id, 0.0)
+            in_top = tf in top_files
 
+            # 9.1 phash/sequence score — already computed, reuse from map
+            phash_score = prefiltered_phash_score
+
+            # 9.2 LLM score — only available for top 30
+            llm_match = llm_file_matches.get(tf.original_name, {}) if in_top else {}
             llm_score = float(llm_match.get("llm_similarity_score", 0))
-            is_suspected = bool(llm_match.get("is_suspected_match", llm_score >= settings.SUSPECTED_MATCH_THRESHOLD))
+            #is_suspected = bool(llm_match.get("is_suspected_match", llm_score >= settings.SUSPECTED_MATCH_THRESHOLD))
+            is_suspected = False  # will be set by our own threshold check in 9.5
 
-            # 7.1. pHash/Sequence similarity (Main similarity component)
-            phash_score = 0.0
-            
-            if dest_type == "video" and tf.file_type == "video":
-                # Video-to-Video: DTW on hash sequences
-                if dest_video_sequence and tf.embedding and isinstance(tf.embedding, list):
-                    phash_score = video_similarity_dtw(dest_video_sequence, tf.embedding)
-                else:
-                    # Fallback to single thumbnail phash if sequence missing
-                    phash_score = phash_similarity(dest_phash, tf.phash) if dest_phash and tf.phash else 0.0
-            
-            elif dest_type == "video" and tf.file_type == "image":
-                # Video-to-Image: DTW with the image as a 1-frame sequence
-                if dest_video_sequence and tf.phash:
-                    phash_score = video_similarity_dtw(dest_video_sequence, [tf.phash])
-                else:
-                    phash_score = phash_similarity(dest_phash, tf.phash) if dest_phash and tf.phash else 0.0
-
-            elif dest_type == "image" and tf.file_type == "video":
-                # Image-to-Video: DTW with the image as a 1-frame sequence
-                if dest_phash and tf.embedding and isinstance(tf.embedding, list):
-                    phash_score = video_similarity_dtw([dest_phash], tf.embedding)
-                else:
-                    phash_score = phash_similarity(dest_phash, tf.phash) if dest_phash and tf.phash else 0.0
-            
-            elif dest_type == "image" and tf.file_type == "image":
-                # Image-to-Image: Standard Hamming distance
-                if dest_phash and tf.phash:
-                    phash_score = phash_similarity(dest_phash, tf.phash)
-
-            # 7.2. Technical Consistency/Pixel (Override for videos)
+            # 9.3 Pixel similarity — only for image-image pairs with high phash
             pixel_score = 0.0
             is_exact_pixel = False
-            
+
             if dest_type == "image" and tf.file_type == "image":
-                # Image-to-Image: Compute pixel similarity
-                if phash_score >= 70 and dest_path and tf.file_path:
+                if phash_score >= 80 and dest_path and tf.file_path:
                     try:
                         pixel_score = pixel_similarity(dest_path, tf.file_path)
                         is_exact_pixel = pixel_score >= settings.PIXEL_MATCH_THRESHOLD
                     except Exception:
-                        pass
+                        pixel_score = phash_score
                 else:
                     pixel_score = phash_score
             else:
-                # Video involved: Use phash sequence as pixel/consistency fallback
                 pixel_score = phash_score
 
-            # 7.3. Semantic score from LLM
+            # 9.4 Semantic score
             semantic_score = llm_score
 
-            # 7.4. Final Weighted Combine
+            # 9.5 Final weighted score
             if dest_type == "video":
-                # VIDEO WEIGHTING (75% Math / 25% AI)
-                # 75% Tech (phash_score/pixel_score) + 25% AI (semantic_score)
                 overall = (float(semantic_score) * 0.25) + (float(phash_score) * 0.75)
-                
-                # TECHNICAL OVERRIDE: If Math > 95%, Trust Math, Skip AI.
                 if phash_score >= 95.0:
                     overall = 100.0
                     is_suspected = True
-                    is_exact_pixel = True # Treat as perfect match
+                    is_exact_pixel = True
             else:
-                # IMAGE WEIGHTING (60% AI / 40% Math)
-                overall = (float(semantic_score) * 0.60) + (float(phash_score) * 0.20) + (float(pixel_score) * 0.20)
-            
+                if in_top:
+                    if llm_score > 0:
+                        # LLM returned a score — full weighted: 60% LLM + 20% phash + 20% pixel
+                        overall = (float(semantic_score) * 0.60) + (float(phash_score) * 0.20) + (float(pixel_score) * 0.20)
+                    else:
+                        # LLM didn't mention this file — it's in top 30 but LLM found no similarity
+                        # Use phash + pixel only, no LLM penalty
+                        overall = (float(phash_score) * 0.50) + (float(pixel_score) * 0.50)
+                else:
+                    # Not in top 30 — phash only
+                    overall = phash_score
+
             overall = float(min(100.0, overall))
 
             if is_suspected or overall >= settings.SUSPECTED_MATCH_THRESHOLD:
@@ -206,9 +269,12 @@ async def run_validation(db: Session, validation_id: int):
                 exact_count += 1
 
             logger.info(
-                "Match Analysis [%s] Type=[%s]: Semantic=%.1f, Tech/Seq=%.1f -> Overall=%.1f (Suspected=%s, Exact=%s)",
-                tf.original_name, dest_type, semantic_score, phash_score, overall, is_suspected, is_exact_pixel
+                "Match [%s] Type=[%s] InTop=%s: Semantic=%.1f, phash=%.1f, Pixel=%.1f -> Overall=%.1f (Suspected=%s, Exact=%s)",
+                tf.original_name, dest_type, in_top,
+                semantic_score, phash_score, pixel_score,
+                overall, is_suspected, is_exact_pixel
             )
+
             match = ValidationMatch(
                 validation_id=validation.id,
                 template_file_id=tf.id,
@@ -220,20 +286,19 @@ async def run_validation(db: Session, validation_id: int):
                 overall_similarity_score=round(overall, 2),
                 is_suspected_match=is_suspected,
                 is_exact_pixel_match=is_exact_pixel,
-                match_reasoning=llm_match.get("match_reasoning", ""),
-                visual_differences=llm_match.get("visual_differences", ""),
-                matched_elements=llm_match.get("matched_elements", [])
+                match_reasoning=llm_match.get("match_reasoning", "") if in_top else "Not in top 30 phash candidates — phash score only",
+                visual_differences=llm_match.get("visual_differences", "") if in_top else "",
+                matched_elements=llm_match.get("matched_elements", []) if in_top else []
             )
             db.add(match)
 
-        # 8. Override verdict based on match findings
+        # 10. Override verdict based on match findings
         if exact_count > 0:
             validation.overall_verdict = "appropriate"
-            validation.mcc_compliant = True # Matching approved template = Compliant
+            validation.mcc_compliant = True
         elif suspected_count > 0:
             validation.overall_verdict = "need_review"
         else:
-            # 0 matches = Not approved content
             validation.overall_verdict = "escalate"
             validation.mcc_compliant = False
             validation.error_message = "No matching approved template found for this content."
@@ -243,14 +308,14 @@ async def run_validation(db: Session, validation_id: int):
             validation.overall_verdict = "escalate"
             validation.mcc_compliant = False
 
-        # 9. Complete validation
+        # 11. Complete validation
         elapsed_ms = int((time.time() - start_time) * 1000)
         validation.validation_status = "completed"
         validation.completed_at = datetime.utcnow()
         validation.processing_time_ms = elapsed_ms
         db.commit()
 
-        # 10. Create report record
+        # 12. Create report record
         report_ref = f"RPT-{datetime.utcnow().strftime('%Y%m%d')}-{str(uuid.uuid4())[:6].upper()}"
         report = Report(
             validation_id=validation.id,
@@ -261,7 +326,8 @@ async def run_validation(db: Session, validation_id: int):
             suspected_matches=suspected_count,
             exact_matches=exact_count,
             overall_verdict=validation.overall_verdict,
-            mcc_compliant=validation.mcc_compliant
+            mcc_compliant=validation.mcc_compliant,
+            created_by=validation.created_by
         )
         db.add(report)
         db.commit()
@@ -272,7 +338,11 @@ async def run_validation(db: Session, validation_id: int):
         if dest_analysis_path and dest_analysis_path != dest_path:
             cleanup_temp_file(dest_analysis_path)
 
-        logger.info("Validation %d completed in %dms: %s", validation.id, elapsed_ms, validation.overall_verdict)
+        logger.info(
+            "Validation %d completed in %dms: %s (files: %d total, %d to LLM, %d suspected, %d exact)",
+            validation.id, elapsed_ms, validation.overall_verdict,
+            len(trained_files), len(top_files), suspected_count, exact_count
+        )
 
     except Exception as e:
         logger.error("Validation %d failed: %s", validation_id, e, exc_info=True)
@@ -283,26 +353,22 @@ async def run_validation(db: Session, validation_id: int):
 
 
 async def update_template_status(db: Session, template_id: int) -> str:
-    """
-    Re-calculate and update the overall status of a template based on its files.
-    Returns the new status.
-    """
+    """Re-calculate and update the overall status of a template based on its files."""
     template = db.query(Template).filter(Template.id == template_id).first()
     if not template:
         return "error"
-    
+
     all_files = db.query(TemplateFile).filter(TemplateFile.template_id == template_id).all()
     total_count = len(all_files)
     done_count = sum(1 for f in all_files if f.processing_status == "done")
     error_count = sum(1 for f in all_files if f.processing_status == "error")
     working_count = sum(1 for f in all_files if f.processing_status in ["pending", "processing"])
-    
+
     template.file_count = total_count
-    
+
     if total_count == 0:
         template.status = "draft"
     elif working_count == 0:
-        # All files finished processing
         if done_count > 0:
             template.status = "ready"
             template.trained_at = datetime.utcnow()
@@ -310,10 +376,12 @@ async def update_template_status(db: Session, template_id: int) -> str:
             template.status = "error"
     else:
         template.status = "training"
-    
+
     db.commit()
-    logger.info("Template %d status updated to %s (Done: %d, Working: %d, Error: %d)", 
-                template_id, template.status, done_count, working_count, error_count)
+    logger.info(
+        "Template %d status updated to %s (Done: %d, Working: %d, Error: %d)",
+        template_id, template.status, done_count, working_count, error_count
+    )
     return template.status
 
 
@@ -328,27 +396,25 @@ async def train_template_file(db: Session, template_file_id: int):
     tf.processing_status = "processing"
     db.commit()
 
+    file_path = None
+    analysis_path = None
+
     try:
         file_path = tf.file_path or tf.file_url
         analysis_path = file_path
 
-        # For video, extract thumbnail for analysis
         if tf.file_type == "video" and tf.file_path:
             thumb = extract_video_thumbnail(tf.file_path)
             if thumb:
                 analysis_path = thumb
 
-        # Compute pHash for images
         if tf.file_type == "image" and tf.file_path:
             tf.phash = compute_phash(tf.file_path)
-        
-        # Compute hash sequence for videos
+
         if tf.file_type == "video" and tf.file_path:
-            tf.phash = compute_phash(analysis_path) # Use thumb as main phash
-            # Extract full sequence for DTW comparison
+            tf.phash = compute_phash(analysis_path)
             tf.embedding = extract_video_hash_sequence(tf.file_path)
 
-        # LLM analysis
         result = await analyze_content_for_training(
             file_path=analysis_path or "",
             file_type=tf.file_type,
@@ -367,11 +433,7 @@ async def train_template_file(db: Session, template_file_id: int):
         tf.processing_error = str(e)
 
     finally:
-        # Commit file changes first
         db.commit()
-        # Update template status
         await update_template_status(db, tf.template_id)
-        
-        # Cleanup video thumbnail if it was created
-        if 'analysis_path' in locals() and analysis_path and analysis_path != file_path:
+        if analysis_path and file_path and analysis_path != file_path:
             cleanup_temp_file(analysis_path)

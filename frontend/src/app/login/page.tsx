@@ -16,21 +16,20 @@ export default function LoginPage() {
     setError("");
 
     try {
-      const formData = new URLSearchParams();
-      formData.append("username", username);
-      formData.append("password", password);
-
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-      const response = await fetch(`${apiUrl}/api/auth/token`, {
+      const authUrl = process.env.NEXT_PUBLIC_AUTH_URL || "http://localhost:8001";
+      const response = await fetch(`${authUrl}/auth/login/`, {
         method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
       });
 
-      if (!response.ok) throw new Error("Invalid username or password");
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || "Invalid username or password");
+      }
 
       const data = await response.json();
-      login(data.access_token, data.role);
+      login(data.access, data.refresh, data.user);
     } catch (err: any) {
       setError(err.message || "Failed to log in. Please try again.");
     } finally {

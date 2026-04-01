@@ -12,7 +12,7 @@ interface User {
 interface AuthContextType {
   user: User | null;
   token: string | null;
-  login: (token: string, role: "admin" | "user") => void;
+  login: (access: string, refresh: string, user: User) => void;
   logout: () => void;
   isLoading: boolean;
 }
@@ -27,17 +27,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
 
   useEffect(() => {
-    // Check local storage on mount
-    const storedToken = localStorage.getItem("access_token");
-    const storedRole = localStorage.getItem("user_role") as "admin" | "user" | null;
-    
-    if (storedToken && storedRole) {
-      setToken(storedToken);
-      // For simplicity, we create a mock user object with just the role
-      // In a real app, you might want to fetch the full user profile from /api/auth/me
-      setUser({ id: 0, username: "user", role: storedRole });
-    }
-    setIsLoading(false);
+    const hydrate = async () => {
+      const storedToken = localStorage.getItem("access_token");
+      if (storedToken) {
+        setToken(storedToken);
+        try {
+          const authUrl = process.env.NEXT_PUBLIC_AUTH_URL || "http://localhost:8001";
+          const res = await fetch(`${authUrl}/auth/me/`, {
+            headers: { "Authorization": `Bearer ${storedToken}` }
+          });
+          if (res.ok) {
+            const userData = await res.json();
+            setUser(userData);
+          } else {
+            logout();
+          }
+        } catch (err) {
+          console.error("Hydration failed", err);
+          logout();
+        }
+      }
+      setIsLoading(false);
+    };
+    hydrate();
   }, []);
 
   useEffect(() => {
@@ -51,17 +63,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [token, isLoading, pathname, router]);
 
-  const login = (newToken: string, role: "admin" | "user") => {
-    localStorage.setItem("access_token", newToken);
-    localStorage.setItem("user_role", role);
-    setToken(newToken);
-    setUser({ id: 0, username: "user", role });
+  const login = (access: string, refresh: string, userData: User) => {
+    localStorage.setItem("access_token", access);
+    localStorage.setItem("refresh_token", refresh);
+    setToken(access);
+    setUser(userData);
     router.push("/dashboard");
   };
 
-  const logout = () => {
+  const logout = async () => {
+    const refresh = localStorage.getItem("refresh_token");
+    if (refresh) {
+      try {
+        const authUrl = process.env.NEXT_PUBLIC_AUTH_URL || "http://localhost:8001";
+        await fetch(`${authUrl}/auth/logout/`, {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}` 
+          },
+          body: JSON.stringify({ refresh })
+        });
+      } catch (err) {
+        console.error("Logout API failed", err);
+      }
+    }
     localStorage.removeItem("access_token");
-    localStorage.removeItem("user_role");
+    localStorage.removeItem("refresh_token");
     setToken(null);
     setUser(null);
     router.push("/login");

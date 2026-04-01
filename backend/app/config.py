@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     # Matching thresholds
     PIXEL_MATCH_THRESHOLD: float = 95.0
     SEMANTIC_MATCH_THRESHOLD: float = 72.0
-    SUSPECTED_MATCH_THRESHOLD: float = 65.0
+    SUSPECTED_MATCH_THRESHOLD: float = 75.0
     
     # App
     APP_NAME: str = "Content Validator"
