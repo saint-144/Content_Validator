@@ -12,7 +12,7 @@ Validate social media posts against trained batches of approved content using Cl
 │                                                              │
 │  ┌─────────────┐   ┌──────────────────┐   ┌─────────────┐ │
 │  │  Next.js 14 │   │   Python/FastAPI  │   │  MySQL 8.0  │ │
-│  │  :3000      │──▶│   :8000          │──▶│  :3306      │ │
+│  │  :8083      │──▶│   :8000          │──▶│  :3306      │ │
 │  │  Dashboard  │   │  + Anthropic/    │   │  7 tables   │ │
 │  │  Templates  │   │    OpenAI Vision  │   └─────────────┘ │
 │  │  Validate   │   └──────────────────┘                    │
@@ -43,8 +43,8 @@ docker-compose up --build
 ```
 
 Wait ~2 minutes, then open:
-- **App**: http://localhost:3000
-- **API Docs**: http://localhost:8000/docs
+- **App**: http://localhost:8083
+- **API Docs**: http://localhost:8084/docs
 
 ---
 
@@ -74,7 +74,7 @@ uvicorn main:app --reload --port 8000
 cd frontend
 npm install
 npm run dev
-# Opens at http://localhost:3000
+# Opens at http://localhost:8083
 ```
 
 ---

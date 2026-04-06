@@ -4,12 +4,13 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { ReactNode } from "react";
+import Image from "next/image";
 
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: "◈", roles: ["admin", "user"] },
-  { href: "/templates", label: "Templates",  icon: "⊞", roles: ["admin"] },
-  { href: "/validate",  label: "Validate",   icon: "⦿", roles: ["admin", "user"] },
-  { href: "/reports",   label: "Reports",    icon: "≡", roles: ["admin", "user"] },
+  { href: "/templates", label: "Templates", icon: "⊞", roles: ["admin"] },
+  { href: "/validate", label: "Validate", icon: "⦿", roles: ["admin", "user"] },
+  { href: "/reports", label: "Reports", icon: "≡", roles: ["admin", "user"] },
 ];
 
 function Sidebar() {
@@ -26,14 +27,26 @@ function Sidebar() {
       <div style={{ padding: "22px 20px 18px", borderBottom: "1px solid #1f2937" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{
-            width: 32, height: 32, borderRadius: 8,
-            background: "linear-gradient(135deg,#6366f1,#8b5cf6)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 16, color: "white", fontWeight: 700,
-          }}>C</div>
+            background: "blue",
+            borderRadius: 6,
+            padding: 2,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 44,
+            height: 44,
+            flexShrink: 0,
+          }}>
+            <Image
+              src="/logo-white.png"
+              alt="InspirEdge"
+              width={48}
+              height={48}
+              style={{ objectFit: "contain" }}
+            />
+          </div>
           <div>
             <div style={{ fontSize: 14, fontWeight: 700, color: "#f1f5f9", letterSpacing: "-0.3px" }}>ContentGuard</div>
-            <div style={{ fontSize: 10, color: "#6b7280" }}>v2.0 · LLM Validation</div>
           </div>
         </div>
       </div>
@@ -58,7 +71,7 @@ function Sidebar() {
       {/* Footer */}
       <div style={{ padding: "14px 16px", borderTop: "1px solid #1f2937" }}>
         {user && (
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span style={{ fontSize: 12, color: "#94a3b8" }}>
               Role: <strong style={{ color: "#f1f5f9" }}>{user.role}</strong>
             </span>
@@ -68,11 +81,6 @@ function Sidebar() {
             }}>Logout</button>
           </div>
         )}
-        <a href="http://localhost:8000/docs" target="_blank" style={{
-          display: "block", fontSize: 11, color: "#6b7280",
-          textDecoration: "none", marginBottom: 4,
-        }}>📖 API Docs →</a>
-        <div style={{ fontSize: 10, color: "#4b5563" }}>MySQL + Python + Next.js</div>
       </div>
     </aside>
   );

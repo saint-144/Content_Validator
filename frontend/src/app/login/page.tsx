@@ -16,7 +16,7 @@ export default function LoginPage() {
     setError("");
 
     try {
-      const authUrl = process.env.NEXT_PUBLIC_AUTH_URL || "http://localhost:8001";
+      const authUrl = process.env.NEXT_PUBLIC_AUTH_URL || "http://localhost:8089";
       const response = await fetch(`${authUrl}/auth/login/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

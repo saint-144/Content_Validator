@@ -5,7 +5,7 @@ Run: python test_api.py  (while backend is running on port 8000)
 
 import requests, sys, json
 
-BASE = "http://localhost:8000"
+BASE = "http://localhost:8084"
 
 def check(label, resp, expected=200):
     ok = resp.status_code == expected

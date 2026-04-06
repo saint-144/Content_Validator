@@ -32,7 +32,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (storedToken) {
         setToken(storedToken);
         try {
-          const authUrl = process.env.NEXT_PUBLIC_AUTH_URL || "http://localhost:8001";
+          const authUrl = process.env.NEXT_PUBLIC_AUTH_URL || "http://localhost:8089";
           const res = await fetch(`${authUrl}/auth/me/`, {
             headers: { "Authorization": `Bearer ${storedToken}` }
           });
@@ -75,12 +75,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const refresh = localStorage.getItem("refresh_token");
     if (refresh) {
       try {
-        const authUrl = process.env.NEXT_PUBLIC_AUTH_URL || "http://localhost:8001";
+        const authUrl = process.env.NEXT_PUBLIC_AUTH_URL || "http://localhost:8089";
         await fetch(`${authUrl}/auth/logout/`, {
           method: "POST",
-          headers: { 
+          headers: {
             "Content-Type": "application/json",
-            "Authorization": `Bearer ${token}` 
+            "Authorization": `Bearer ${token}`
           },
           body: JSON.stringify({ refresh })
         });

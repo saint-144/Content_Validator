@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     # App
     APP_NAME: str = "Content Validator"
     DEBUG: bool = True
-    CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:4200", "http://localhost"]
+    CORS_ORIGINS: list = ["http://localhost:8083", "http://localhost:4200", "http://localhost"]
 
     class Config:
         env_file = ".env"
