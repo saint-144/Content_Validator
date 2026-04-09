@@ -13,6 +13,7 @@ from app.services.image_service import save_upload, get_file_type
 from app.services.validation_service import run_validation
 from app.services.export_service import export_validations_to_excel
 from app.config import settings
+from app.api.deps import get_current_user, require_roles, CurrentUser
 
 router = APIRouter(prefix="/api/validations", tags=["Validations"])
 
@@ -27,7 +28,8 @@ def list_validations(
     status: Optional[str] = None,
     page: int = 1,
     page_size: int = 20,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(require_roles(["admin", "user"]))
 ):
     q = db.query(Validation)
     if template_id:
@@ -40,7 +42,7 @@ def list_validations(
 
 
 @router.get("/{validation_id}", response_model=ValidationOut)
-def get_validation(validation_id: int, db: Session = Depends(get_db)):
+def get_validation(validation_id: int, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_roles(["admin", "user"]))):
     v = db.query(Validation).filter(Validation.id == validation_id).first()
     if not v:
         raise HTTPException(404, "Validation not found")
@@ -54,7 +56,8 @@ async def validate_upload(
     post_description: Optional[str] = Form(None),
     post_platform: Optional[str] = Form(None),
     file: UploadFile = File(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(require_roles(["admin", "user"]))
 ):
     template = db.query(Template).filter(Template.id == template_id).first()
     if not template:
@@ -90,7 +93,8 @@ async def validate_upload(
         post_timestamp=ts,
         post_description=post_description,
         post_platform=post_platform,
-        validation_status="pending"
+        validation_status="pending",
+        created_by=current_user.id
     )
     db.add(validation)
     db.commit()
@@ -105,7 +109,8 @@ async def validate_upload(
 @router.post("/url")
 async def validate_url(
     data: ValidationCreateURL,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(require_roles(["admin", "user"]))
 ):
     template = db.query(Template).filter(Template.id == data.template_id).first()
     if not template:
@@ -123,7 +128,8 @@ async def validate_url(
         post_timestamp=data.post_timestamp,
         post_description=data.post_description,
         post_platform=data.post_platform,
-        validation_status="pending"
+        validation_status="pending",
+        created_by=current_user.id
     )
     db.add(validation)
     db.commit()
@@ -136,7 +142,7 @@ async def validate_url(
 
 
 @router.get("/{validation_id}/status")
-def get_validation_status(validation_id: int, db: Session = Depends(get_db)):
+def get_validation_status(validation_id: int, db: Session = Depends(get_db), current_user: CurrentUser = Depends(require_roles(["admin", "user"]))):
     v = db.query(Validation).filter(Validation.id == validation_id).first()
     if not v:
         raise HTTPException(404)

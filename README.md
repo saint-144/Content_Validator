@@ -12,7 +12,7 @@ Validate social media posts against trained batches of approved content using Cl
 │                                                              │
 │  ┌─────────────┐   ┌──────────────────┐   ┌─────────────┐ │
 │  │  Next.js 14 │   │   Python/FastAPI  │   │  MySQL 8.0  │ │
-│  │  :3000      │──▶│   :8000          │──▶│  :3306      │ │
+│  │  :8083      │──▶│   :8000          │──▶│  :3306      │ │
 │  │  Dashboard  │   │  + Anthropic/    │   │  7 tables   │ │
 │  │  Templates  │   │    OpenAI Vision  │   └─────────────┘ │
 │  │  Validate   │   └──────────────────┘                    │
@@ -43,8 +43,8 @@ docker-compose up --build
 ```
 
 Wait ~2 minutes, then open:
-- **App**: http://localhost:3000
-- **API Docs**: http://localhost:8000/docs
+- **App**: http://localhost:8083
+- **API Docs**: http://localhost:8084/docs
 
 ---
 
@@ -74,7 +74,7 @@ uvicorn main:app --reload --port 8000
 cd frontend
 npm install
 npm run dev
-# Opens at http://localhost:3000
+# Opens at http://localhost:8083
 ```
 
 ---
@@ -148,7 +148,7 @@ If no API key is set, the system runs in **demo mode** — it returns mock simil
 Overall Score = (LLM Semantic Score × 55%) + (Pixel Hash Score × 30%) + (LLM Score × 15%)
 
 Thresholds (configurable in .env):
-  SUSPECTED_MATCH_THRESHOLD = 65%   → "is_suspected_match: true"
+  SUSPECTED_MATCH_THRESHOLD = 75%   → "is_suspected_match: true"
   PIXEL_MATCH_THRESHOLD     = 95%   → "is_exact_pixel_match: true"
   SEMANTIC_MATCH_THRESHOLD  = 72%   → LLM similarity threshold
 
@@ -221,5 +221,5 @@ UPLOAD_DIR=./uploads
 MAX_FILE_SIZE_MB=100
 PIXEL_MATCH_THRESHOLD=95
 SEMANTIC_MATCH_THRESHOLD=72
-SUSPECTED_MATCH_THRESHOLD=65
+SUSPECTED_MATCH_THRESHOLD=75
 ```

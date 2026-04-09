@@ -190,6 +190,7 @@ def optimize_image_for_llm(file_path: str, max_size: int = 1024) -> str:
     Resize image to a max dimension and save as optimized JPEG.
     Used to speed up LLM uploads and processing.
     """
+    logger.error("DEBUG optimize_image_for_llm type=%s value=%s", type(file_path), repr(file_path)[:200])
     try:
         img = Image.open(file_path).convert("RGB")
         # Maintain aspect ratio

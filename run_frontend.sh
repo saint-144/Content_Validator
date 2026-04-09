@@ -15,6 +15,6 @@ echo "Installing npm packages..."
 npm install
 
 echo ""
-echo "Starting Next.js on http://localhost:3000"
+echo "Starting Next.js on http://localhost:8083"
 echo ""
-NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev
+NEXT_PUBLIC_API_URL=http://localhost:8084 npm run dev

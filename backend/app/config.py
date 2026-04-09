@@ -4,7 +4,7 @@ from functools import lru_cache
 
 class Settings(BaseSettings):
     # Database
-    DATABASE_URL: str = "mysql+pymysql://root:Validator@2024@localhost:3306/content_validator"
+    DATABASE_URL: str = "mysql+pymysql://root:Validator%402024@localhost:3306/content_validator"
     
     # LLM Provider: "anthropic", "openai", "gemini", or "nvidia"
     LLM_PROVIDER: str = "nvidia"
@@ -22,12 +22,12 @@ class Settings(BaseSettings):
     # Matching thresholds
     PIXEL_MATCH_THRESHOLD: float = 95.0
     SEMANTIC_MATCH_THRESHOLD: float = 72.0
-    SUSPECTED_MATCH_THRESHOLD: float = 65.0
+    SUSPECTED_MATCH_THRESHOLD: float = 75.0
     
     # App
     APP_NAME: str = "Content Validator"
     DEBUG: bool = True
-    CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:4200", "http://localhost"]
+    CORS_ORIGINS: list = ["http://localhost:8083", "http://localhost:4200", "http://localhost"]
 
     class Config:
         env_file = ".env"

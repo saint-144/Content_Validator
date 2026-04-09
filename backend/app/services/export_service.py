@@ -55,9 +55,10 @@ def export_validations_to_excel(validations_data: List[dict]) -> bytes:
     ws_summary.column_dimensions["G"].width = 18
     ws_summary.column_dimensions["H"].width = 15
     ws_summary.column_dimensions["I"].width = 15
+    ws_summary.column_dimensions["J"].width = 30
 
     # Title
-    ws_summary.merge_cells("A1:I1")
+    ws_summary.merge_cells("A1:J1")
     title_cell = ws_summary["A1"]
     title_cell.value = f"Content Validation Report — Generated {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC"
     title_cell.font = Font(bold=True, size=13, color="1E3A5F")
@@ -67,7 +68,7 @@ def export_validations_to_excel(validations_data: List[dict]) -> bytes:
     headers = [
         "Report Ref", "Post Timestamp", "Post Description / Caption",
         "Template Used", "Suspected Match File(s)", "Exact Pixel Match?",
-        "MCC Compliant?", "Action", "Validated At"
+        "MCC Compliant?", "Action", "Validated At", "Post URL"
     ]
     _apply_header(ws_summary, 2, headers)
     ws_summary.row_dimensions[2].height = 25
@@ -96,7 +97,8 @@ def export_validations_to_excel(validations_data: List[dict]) -> bytes:
             "Yes" if exact else "No",
             "Yes" if mcc else ("No" if mcc is False else "N/A"),
             action_map.get(verdict, verdict),
-            str(v.get("created_at", ""))[:19]
+            str(v.get("created_at", ""))[:19],
+            v.get("post_url", "")
         ]
 
         for col_idx, value in enumerate(row_data, 1):

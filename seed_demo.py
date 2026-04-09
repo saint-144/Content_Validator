@@ -144,7 +144,7 @@ def seed():
 
         db.commit()
         print(f"  Created {val_count} demo validations with matches and reports.")
-        print("\n✅ Seed complete! Open http://localhost:3000/dashboard to explore.")
+        print("\n✅ Seed complete! Open http://localhost:8083/dashboard to explore.")
 
     finally:
         db.close()
